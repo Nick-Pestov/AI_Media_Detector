@@ -1,0 +1,18 @@
+/* overlay.css */
+/* Minimal CSS for your side panel and overlays */
+
+#ai-detector-panel {
+    font-family: Arial, sans-serif;
+    font-size: 14px;
+    color: #333;
+  }
+  
+  #ai-detector-panel p {
+    margin: 0 0 10px;
+  }
+  
+  img[style*="outline: 3px solid red"] {
+    /* We could further style flagged images if desired */
+    transition: outline 0.5s;
+  }
+  

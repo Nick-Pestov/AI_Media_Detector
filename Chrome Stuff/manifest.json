@@ -1,0 +1,13 @@
+{
+    "name": "Gen AI 2025 - AI Detector Extension",
+    "description": "Base Level Extension",
+    "version": "1.0",
+    "icons": {
+      "128": "AI_Detector_Chrome_Extension_Logo.png"
+    },
+    "manifest_version": 3,
+    "action": {
+      "default_popup": "hello.html",
+      "default_icon": "AI_Detector_Chrome_Extension_Logo.png"
+    }
+  }

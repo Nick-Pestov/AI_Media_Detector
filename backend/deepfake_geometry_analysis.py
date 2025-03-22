@@ -4,13 +4,77 @@ import matplotlib.pyplot as plt
 from PIL import Image
 import os
 from mesonet_deepfake_detector import detect_and_crop_face, run_meso4_on_face, check_exif_metadata
+import base64
+from io import BytesIO
+import matplotlib
+matplotlib.use('Agg') 
+
+def fig_to_base64(fig):
+    buf = BytesIO()
+    fig.savefig(buf, format='png')
+    buf.seek(0)
+    img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+    buf.close()
+    plt.close(fig)  # <-- Make sure you close figures!
+    return img_base64
+
+def analyze_image_with_visuals(image_path):
+    reasons = []
+    visuals = {}
+
+    # Frequency Analysis
+    radial_profile, freq_slope = analyze_frequency_distribution(image_path)
+    if not -2.5 < freq_slope < -0.5:
+        reasons.append("Unnatural frequency distribution.")
+        fig = plt.figure()
+        show_frequency_profile(radial_profile)
+        visuals["frequency_analysis"] = fig_to_base64(fig)
+
+    # Blur Analysis
+    laplacian_vars, avg_blur = local_blur_analysis(image_path)
+    if avg_blur < 10:
+        reasons.append("Image is unnaturally blurry or AI-generated.")
+        fig = plt.figure()
+        plt.hist(laplacian_vars, bins=20, color='blue')
+        plt.title("Local Blur Variance")
+        plt.xlabel("Variance")
+        plt.ylabel("Frequency")
+        visuals["blur_analysis"] = fig_to_base64(fig)
+
+    # Horizon Analysis
+    horizon_lines, edges = horizon_checker(image_path)
+    suspicious_geometry = analyze_horizon_heuristics(horizon_lines)
+    if suspicious_geometry:
+        reasons.append("Suspicious horizon geometry.")
+        img_color = cv2.cvtColor(np.array(Image.open(image_path)), cv2.COLOR_RGB2BGR)
+        for (x1, y1, x2, y2, _) in horizon_lines:
+            cv2.line(img_color, (x1, y1), (x2, y2), (0,0,255), 2)
+        fig = plt.figure(figsize=(8,8))
+        plt.imshow(cv2.cvtColor(img_color, cv2.COLOR_BGR2RGB))
+        plt.title("Detected Horizon Lines")
+        plt.axis('off')
+        visuals["horizon_analysis"] = fig_to_base64(fig)
+
+    # Face Forgery (optional)
+    face_suspicious = analyze_face(image_path)
+    if face_suspicious:
+        reasons.append("Face forgery detected.")
+
+    if reasons:
+        return "AI_GENERATED", reasons, visuals
+    else:
+        return "REAL", ["Image seems authentic."], {}
 
 # ------------------------------
 # (1) Frequency Analysis via FFT
 # ------------------------------
 def analyze_frequency_distribution(image_path):
-    with Image.open(image_path).convert('L') as im:
-        img_np = np.array(im, dtype=np.uint8)
+    try:
+        with Image.open(image_path).convert('L') as im:
+            img_np = np.array(im, dtype=np.uint8)
+    except Exception as e:
+        print(f"❌ Unsupported image format for file, cannot analyze it T_T")
+        return None, None
     f = np.fft.fft2(img_np)
     fshift = np.fft.fftshift(f)
     magnitude_spectrum = np.abs(fshift)
@@ -116,12 +180,17 @@ def analyze_horizon_heuristics(horizon_lines):
 # ------------------------------
 # (5) MesoNet Analysis (Face forgery) <-- not the most reliable so it has a high threshold, but still captures very high values well
 # ------------------------------
+
 def analyze_face(image_path, face_cascade="haarcascade_frontalface_default.xml", meso_weights="Meso4_DF.h5"):
-    face_rgb, bbox = detect_and_crop_face(image_path, face_cascade)
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    face_cascade_path = os.path.join(current_dir, face_cascade)
+    meso_weights_path = os.path.join(current_dir, meso_weights)
+
+    face_rgb, bbox = detect_and_crop_face(image_path, face_cascade_path)
     face_label, face_conf = "NoFace", 0.0
     suspicious = False
     if face_rgb is not None:
-        face_label, face_conf = run_meso4_on_face(face_rgb, meso_weights)
+        face_label, face_conf = run_meso4_on_face(face_rgb, meso_weights=meso_weights_path)
         if face_label == "Fake" and face_conf > 0.6:
             print(f"Meso4: Fake face conf={face_conf:.2f}")
             suspicious = True
@@ -153,7 +222,7 @@ def analyze_image(image_path, save_plots=False):
         return "AI_GENERATED", "; ".join(reasons)
     return "REAL", "Image seems authentic."
 
-    """
+def analyze_image2(image_path, save_plots=False):
     print("=== Frequency Analysis ===")
     radial_profile, freq_slope = analyze_frequency_distribution(image_path)
     print(f"Frequency slope: {freq_slope:.2f} (Natural: -1 to -2)")
@@ -202,10 +271,9 @@ def analyze_image(image_path, save_plots=False):
     if not suspicious and not face_passed:
         print("✅ Verdict: Likely REAL")
     print("------------------------\n")
-    """
 # ------------------------------
 # (6) Run
 # ------------------------------
 if __name__ == "__main__":
-    IMAGE_PATH = "AI_generated2.png"  # Replace with your image
-    analyze_image(IMAGE_PATH)
+    IMAGE_PATH = "./backend/image8.avif"  # Replace with your image
+    analyze_image2(IMAGE_PATH)

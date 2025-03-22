@@ -7,6 +7,8 @@ from mesonet_deepfake_detector import detect_and_crop_face, run_meso4_on_face, c
 import base64
 from io import BytesIO
 import matplotlib
+import pytesseract
+from PIL import Image
 matplotlib.use('Agg') 
 
 def fig_to_base64(fig):
@@ -21,6 +23,7 @@ def fig_to_base64(fig):
 def analyze_image_with_visuals(image_path):
     reasons = []
     visuals = {}
+    explanations = []
 
     # Frequency Analysis
     radial_profile, freq_slope = analyze_frequency_distribution(image_path)
@@ -43,10 +46,21 @@ def analyze_image_with_visuals(image_path):
 
     # Horizon Analysis
     horizon_lines, edges = horizon_checker(image_path)
-    suspicious_geometry = analyze_horizon_heuristics(horizon_lines)
+    suspicious_geometry, horizon_explanation = analyze_horizon_heuristics(horizon_lines)
     if suspicious_geometry:
         reasons.append("Suspicious horizon geometry.")
+        explanations.append(horizon_explanation)
+
         img_color = cv2.cvtColor(np.array(Image.open(image_path)), cv2.COLOR_RGB2BGR)
+        if img_color.size == 0:
+            print("❌ Image loading failed, skipping visualization.")
+        else:
+            plt.figure(figsize=(8, 8))
+            plt.imshow(cv2.cvtColor(img_color, cv2.COLOR_BGR2RGB))
+            plt.axis('off')
+            plt.title("Detected Horizon Lines")
+            plt.savefig(buf, format='png', bbox_inches='tight')
+            plt.close()
         for (x1, y1, x2, y2, _) in horizon_lines:
             cv2.line(img_color, (x1, y1), (x2, y2), (0,0,255), 2)
         fig = plt.figure(figsize=(8,8))
@@ -59,11 +73,21 @@ def analyze_image_with_visuals(image_path):
     face_suspicious = analyze_face(image_path)
     if face_suspicious:
         reasons.append("Face forgery detected.")
+        explanations.append("Detected face forgery based on neural network predictions (MesoNet).")
 
     if reasons:
-        return "AI_GENERATED", reasons, visuals
+        return "AI_GENERATED", reasons, visuals, explanations
     else:
-        return "REAL", ["Image seems authentic."], {}
+        return "REAL", ["Image seems authentic."], {}, []
+    
+# Apply Tesseract to extract textual data from an image
+def extract_text_from_image(image_path):
+    try:
+        text = pytesseract.image_to_string(Image.open(image_path))
+        return text.strip()
+    except Exception as e:
+        print(f"OCR Error: {e}")
+        return ""
 
 # ------------------------------
 # (1) Frequency Analysis via FFT
@@ -159,23 +183,23 @@ def analyze_horizon_heuristics(horizon_lines):
     y_range = np.ptp(y_coords) if y_coords else 0
     num_lines = len(horizon_lines)
 
-    print(f"[+] Horizon Heuristics:")
-    print(f"  - Num horizontal lines: {num_lines}")
-    print(f"  - Angle std deviation : {angle_std:.2f}")
-    print(f"  - Vertical spread      : {y_range} pixels")
+    explanation = f"Detected {num_lines} horizontal lines. "
 
     suspicious = False
     if num_lines < 5:
-        print("  ⚠️ Few horizontal lines detected")
+        explanation += f"⚠️ Only {num_lines} horizontal lines detected; typically, real images have more consistent and numerous horizontal edges. "
         suspicious = True
     if angle_std > 5:
-        print("  ⚠️ Inconsistent horizon angles (std > 5)")
+        explanation += f"⚠️ Lines are inconsistent with an angle standard deviation of {angle_std:.2f} degrees, indicating unnatural geometry. "
         suspicious = True
     if y_range < 100:
-        print("  ⚠️ Horizon lines bunched (spread < 100 px)")
+        explanation += f"⚠️ Horizon lines have low vertical spread ({y_range}px), suggesting unnatural alignment. "
         suspicious = True
 
-    return suspicious
+    if not suspicious:
+        explanation += "✅ Geometry appears natural."
+
+    return suspicious, explanation
 
 # ------------------------------
 # (5) MesoNet Analysis (Face forgery) <-- not the most reliable so it has a high threshold, but still captures very high values well

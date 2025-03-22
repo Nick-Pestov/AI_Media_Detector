@@ -2,7 +2,9 @@ from flask import Flask, request, jsonify
 import requests
 import tempfile
 import os
-from deepfake_geometry_analysis import analyze_image_with_visuals
+from deepfake_geometry_analysis import analyze_image_with_visuals, extract_text_from_image
+from gemini_helper import gemini_verify_content
+import re
 import matplotlib
 matplotlib.use('Agg')
 
@@ -20,10 +22,23 @@ def analyze():
         tmp.write(response.content)
         tmp_path = tmp.name
 
-    verdict, reasons, visuals = analyze_image_with_visuals(tmp_path)
+    verdict, reasons, visuals, explanations = analyze_image_with_visuals(tmp_path)
+
+    # New OCR & Gemini verification
+    extracted_text = extract_text_from_image(tmp_path)
+    gemini_result = None
+    if len(extracted_text) > 6 and re.search('[a-zA-Z]', extracted_text): # checks to see if string actually sort of makes sense potentially if it does
+        gemini_result = gemini_verify_content(extracted_text) if extracted_text else None
+
     os.unlink(tmp_path)
 
-    return jsonify({"verdict": verdict, "reasons": reasons, "visuals": visuals})
+    return jsonify({
+        "verdict": verdict,
+        "reasons": reasons,
+        "visuals": visuals,
+        "explanations": explanations,
+        "text_analysis": gemini_result
+    })
 
 def analyze_image_api(image_path):
     from deepfake_geometry_analysis import (
@@ -66,4 +81,4 @@ def analyze_image_api(image_path):
         return "REAL", "Image seems authentic."
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, host='127.0.0.1', port=5000)

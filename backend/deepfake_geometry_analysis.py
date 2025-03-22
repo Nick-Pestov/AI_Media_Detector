@@ -59,6 +59,7 @@ def analyze_image_with_visuals(image_path):
             plt.imshow(cv2.cvtColor(img_color, cv2.COLOR_BGR2RGB))
             plt.axis('off')
             plt.title("Detected Horizon Lines")
+            buf = BytesIO()
             plt.savefig(buf, format='png', bbox_inches='tight')
             plt.close()
         for (x1, y1, x2, y2, _) in horizon_lines:

@@ -152,32 +152,14 @@ async function analyzeTextForMisinformation(text) {
  * For now, we return a dummy response.
  */
 async function checkAIManipulation(base64Image) {
-  // Example of a real call:
-  // const response = await fetch('https://your-server.com/detect-ai', {
-  //   method: 'POST',
-  //   headers: { 'Content-Type': 'application/json' },
-  //   body: JSON.stringify({ image: base64Image })
-  // });
-  // return await response.json();
-
-  // Dummy result: randomly say 20% of images are AI with 80% confidence
-  if (Math.random() < 0.2) {
-    return {
-      isAIGenerated: true,
-      confidence: 80,
-      suspectRegions: [
-        // Example region structure
-        { x: 10, y: 10, width: 50, height: 50 }
-      ]
-    };
-  } else {
-    return {
-      isAIGenerated: false,
-      confidence: 0,
-      suspectRegions: []
-    };
+    const response = await fetch('http://localhost:5000/detect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: base64Image })
+    });
+  
+    return await response.json();
   }
-}
 
 /**
  * Draw bounding box overlays on suspicious regions

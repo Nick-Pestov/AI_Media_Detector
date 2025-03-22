@@ -2,16 +2,16 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image, ImageChops, ExifTags
-import pywt       # We'll use "pywt" in code
+import pywt
 import io
 import os
 import tensorflow as tf
 from tensorflow.keras import Model, Input
 from tensorflow.keras.layers import Conv2D, BatchNormalization, MaxPooling2D, Flatten, Dropout, Dense
 
-# -------------------------------------------------
-# 0) Utility: MesoNet Model (Face Forgery Detection)
-# -------------------------------------------------
+# -------------------------------------------
+# (A) Face Forgery (Meso4)
+# -------------------------------------------
 def build_meso4():
     inputs = Input(shape=(256, 256, 3))
     x = Conv2D(8, (3,3), padding='same', activation='relu')(inputs)
@@ -38,54 +38,55 @@ def build_meso4():
 
 def load_pretrained_mesonet(weights_path="Meso4_DF.h5"):
     if not os.path.exists(weights_path):
-        print(f"[!] Meso4 weights not found at {weights_path}. Please place Meso4_DF.h5 alongside this script.")
+        print(f"[!] Meso4 weights not found at {weights_path}.")
         return None
     model = build_meso4()
     model.load_weights(weights_path)
-    print(f"[*] Loaded Meso4 pretrained weights from {weights_path}")
+    print(f"[*] Loaded Meso4 pretrained from {weights_path}")
     return model
 
-# -------------------------------------------------
-# 1) EXIF & Metadata Checking (Lightweight)
-# -------------------------------------------------
+
+# -------------------------------------------
+# (B) EXIF
+# -------------------------------------------
 def check_exif_metadata(image_path):
     """
-    Prints some EXIF info if present (e.g., camera make/model).
-    Large inconsistencies can be a manipulation flag.
+    Return exif_info, suspicious_reason
     """
-    if not os.path.exists(image_path):
-        print("[!] Image does not exist.")
-        return
-
+    exif_info = {}
+    suspicious_reason = None
     try:
         with Image.open(image_path) as img:
-            exif_data = img._getexif()  # Basic PIL EXIF
+            exif_data = img._getexif()
             if exif_data is None:
-                print("[*] No EXIF data found.")
+                suspicious_reason = "No EXIF data."
+                return exif_info, True
             else:
-                print("[*] EXIF data:")
                 for tag_id, value in exif_data.items():
                     tag_name = ExifTags.TAGS.get(tag_id, tag_id)
-                    print(f"    {tag_name}: {value}")
-    except Exception as e:
-        print(f"[!] EXIF read error: {e}")
+                    exif_info[tag_name] = value
+                # Example: if 'Software' in exif_info and 'Adobe' in exif_info['Software']:
+                #     suspicious_reason = "Edited in Adobe software."
+    except:
+        suspicious_reason = "EXIF error reading."
+    return exif_info, False
 
-# -------------------------------------------------
-# 2) Face Detection & Cropping (if face found)
-# -------------------------------------------------
-def detect_and_crop_face(image_path, cascade_path="haarcascade_frontalface_default.xml", target_size=(256, 256)):
+
+# -------------------------------------------
+# (C) Face Detection + Meso4
+# -------------------------------------------
+def detect_and_crop_face(img_path, cascade_path="haarcascade_frontalface_default.xml", target_size=(256, 256)):
     if not os.path.exists(cascade_path):
-        print(f"[!] Haar cascade file not found: {cascade_path}")
+        print(f"[!] Haar cascade not found: {cascade_path}")
         return None, None
 
     face_cascade = cv2.CascadeClassifier(cascade_path)
-    img_bgr = cv2.imread(image_path)
+    img_bgr = cv2.imread(img_path)
     if img_bgr is None:
-        print("[!] Could not read image for face detection.")
         return None, None
 
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
+    faces = face_cascade.detectMultiScale(gray, 1.1, 5)
     if len(faces) == 0:
         return None, None
 
@@ -95,50 +96,52 @@ def detect_and_crop_face(image_path, cascade_path="haarcascade_frontalface_defau
     face_rgb = cv2.resize(face_rgb, target_size)
     return face_rgb, (x, y, w, h)
 
-def run_meso4_on_face(face_img, meso_weights="Meso4_DF.h5"):
-    """
-    Loads Meso4 if not already loaded, runs on a single face crop.
-    Return label "Fake"/"Real" and confidence.
-    """
+def run_meso4_on_face(face_rgb, meso_weights="Meso4_DF.h5"):
     model = load_pretrained_mesonet(meso_weights)
     if model is None:
         return "NoModel", 0.0
-
-    arr = face_img.astype(np.float32)/255.0
+    arr = face_rgb.astype(np.float32)/255.0
     arr = np.expand_dims(arr, axis=0)
     pred = model(arr, training=False).numpy()[0, 0]
-    if pred > 0.5:
+    if pred > 0.9:
         return "Fake", pred
     else:
-        return "Real", (1.0 - pred)
+        return "Real", 1.0 - pred
 
-# -------------------------------------------------
-# 3) Wavelet-based Analysis
-# -------------------------------------------------
+# -------------------------------------------
+# (D) Wavelet / ELA / Pixel Anomaly / FFT
+# -------------------------------------------
+
+
+####################################################################################################
+# Will not use these functions in the final analysis since unreliable. Yield lots of False Negatives
+
+############# NOT USED #############
+
 def wavelet_analysis(image_path):
     """
-    Simple wavelet decomposition using PyWavelets (db1).
-    Returns an 8-bit detail magnitude image.
+    Return the wavelet detail map (8-bit) and a detail_energy float
     """
     with Image.open(image_path).convert('L') as original:
         arr = np.array(original, dtype=np.float32)
     coeffs2 = pywt.dwt2(arr, 'db1')
     cA, (cH, cV, cD) = coeffs2
+
     detail_mag = np.sqrt(cH**2 + cV**2 + cD**2)
+    detail_energy = float(detail_mag.mean())  # average detail magnitude
+
+    # normalize for visualization
     detail_mag -= detail_mag.min()
     max_val = detail_mag.max()
-    if max_val != 0:
+    if max_val > 0:
         detail_mag /= max_val
-    detail_mag_img = (detail_mag * 255).astype(np.uint8)
-    return detail_mag_img
+    detail_map = (detail_mag * 255).astype(np.uint8)
 
-# -------------------------------------------------
-# 4) Error Level Analysis (ELA)
-# -------------------------------------------------
-def perform_ela(image_path, quality=90):
+    return detail_map, detail_energy
+
+def ela_analysis(image_path, quality=90):
     """
-    Resaves the image at 'quality' as JPEG, compares to original.
-    Returns a PIL Image (the difference map).
+    Return ELA image (PIL) and average_brightness
     """
     with Image.open(image_path).convert('RGB') as original:
         buffer = io.BytesIO()
@@ -150,245 +153,210 @@ def perform_ela(image_path, quality=90):
         extrema = diff.getextrema()
         max_diff = max([ex[1] for ex in extrema]) if extrema else 0
         scale = 255.0 / max_diff if max_diff != 0 else 1.0
-        diff = diff.point(lambda i: i * scale)
-    return diff
+        ela_img = diff.point(lambda i: i * scale)
 
-# -------------------------------------------------
-# 5) Naive Pixel Anomaly
-# -------------------------------------------------
+    # average brightness
+    ela_np = np.array(ela_img.convert('L'), dtype=np.float32)
+    avg_brightness = float(ela_np.mean())
+    return ela_img, avg_brightness
+
 def pixel_anomaly_map(image_pil, block_size=8):
     """
-    Blockwise std dev check:
-      - Very low std => suspiciously uniform region
-      - Very high std => suspiciously sharp region
-    Returns a 0..1 heatmap as a np.float32 array
+    Returns heatmap(0..1) and fraction_flagged(0..1).
     """
     img_np = np.array(image_pil.convert('RGB'), dtype=np.float32)
-    H, W, C = img_np.shape
+    H, W, _ = img_np.shape
     heatmap = np.zeros((H, W), dtype=np.float32)
+
+    flagged_pixels = 0
+    total_pixels = H*W
 
     for yy in range(0, H, block_size):
         for xx in range(0, W, block_size):
-            patch = img_np[yy:yy+block_size, xx:xx+block_size, :]
+            patch = img_np[yy:yy+block_size, xx:xx+block_size]
             if patch.size == 0:
                 continue
             std_dev = np.std(patch)
-            # Simple thresholds
             if std_dev < 4:
+                # uniform
                 heatmap[yy:yy+block_size, xx:xx+block_size] = 1.0
+                flagged_pixels += (block_size*block_size)
             elif std_dev > 50:
+                # super sharp
                 heatmap[yy:yy+block_size, xx:xx+block_size] = 0.5
+                flagged_pixels += (block_size*block_size)
 
     max_val = heatmap.max()
     if max_val > 0:
         heatmap /= max_val
-    return heatmap
 
-# -------------------------------------------------
-# 6) Visualization
-# -------------------------------------------------
-def visualize_results(original_bgr, face_bbox, face_label_str, face_conf,
-                      wavelet_map, ela_map, anomaly_heatmap):
+    fraction_flagged = flagged_pixels / float(total_pixels)
+    return heatmap, fraction_flagged
+
+def fft_naturalness(image_path):
     """
-    Displays up to 4 subplots:
-      - Original (with face box if found)
-      - Wavelet detail
-      - ELA
-      - Anomaly heatmap
+    Returns a measure of how "natural" the frequency distribution is.
+    We'll do:
+      1) Convert to grayscale
+      2) 2D FFT
+      3) Compute radial average of magnitude
+      4) Fit or approximate the slope => if slope is too "flat" or "steep", suspicious
+    We'll just return the slope as a single float. (A real approach might be more elaborate.)
     """
-    if original_bgr is None:
-        print("[!] No original image to display.")
-        return
+    with Image.open(image_path).convert('L') as im:
+        img_np = np.array(im, dtype=np.float32)
 
-    # Draw face box
-    if face_bbox is not None:
-        x, y, w, h = face_bbox
-        cv2.rectangle(original_bgr, (x, y), (x+w, y+h), (0,255,0), 2)
-        cv2.putText(original_bgr, f"{face_label_str}({face_conf:.2f})", 
-                    (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,0), 2)
+    # 2D FFT
+    f = np.fft.fft2(img_np)
+    fshift = np.fft.fftshift(f)
+    mag = np.abs(fshift)
 
-    # We'll show up to 4 images
-    # 1) Original
-    # 2) Wavelet
-    # 3) ELA
-    # 4) Pixel anomaly
-    n_images = 1
-    if wavelet_map is not None:
-        n_images += 1
-    if ela_map is not None:
-        n_images += 1
-    if anomaly_heatmap is not None:
-        n_images += 1
+    # radial average
+    H, W = mag.shape
+    cy, cx = H//2, W//2
+    rmax = int(np.hypot(cx, cy))
+    radial_vals = []
+    for r in range(1, rmax, 5):  # step radius by 5 for speed
+        mask = (np.square(np.arange(H)[:,None]-cy) + np.square(np.arange(W)-cx)) 
+        ring = (mask>=((r-2)**2)) & (mask<=(r+2)**2)
+        ring_mag = mag[ring]
+        if ring_mag.size > 0:
+            radial_vals.append((r, ring_mag.mean()))
+    # Fit log-log slope
+    # y ~ 1/f => log(y) = -1*log(r) + const
+    # We'll do a simple linear fit in log space
+    if len(radial_vals)<2:
+        return 0.0  # can't fit
 
-    fig, axes = plt.subplots(1, n_images, figsize=(5*n_images, 5))
-    if n_images == 1:
-        axes = [axes]
+    rs = np.array([x[0] for x in radial_vals], dtype=np.float32)
+    vals = np.array([x[1] for x in radial_vals], dtype=np.float32)
+    rs_log = np.log(rs+1e-8)
+    vals_log = np.log(vals+1e-8)
 
-    idx = 0
+    # Fit slope
+    A = np.vstack([rs_log, np.ones_like(rs_log)]).T
+    slope, intercept = np.linalg.lstsq(A, vals_log, rcond=None)[0]
 
-    # Original
-    axes[idx].imshow(cv2.cvtColor(original_bgr, cv2.COLOR_BGR2RGB))
-    axes[idx].set_title("Original")
-    axes[idx].axis('off')
-    idx += 1
+    return slope  # Typically negative for natural images
 
-    # Wavelet
-    if wavelet_map is not None:
-        axes[idx].imshow(wavelet_map, cmap='gray')
-        axes[idx].set_title("Wavelet Detail")
-        axes[idx].axis('off')
-        idx += 1
-
-    # ELA
-    if ela_map is not None:
-        ela_np = np.array(ela_map.convert('RGB'))
-        axes[idx].imshow(ela_np)
-        axes[idx].set_title("ELA Map")
-        axes[idx].axis('off')
-        idx += 1
-
-    # Anomaly
-    if anomaly_heatmap is not None:
-        anomaly_vis = (anomaly_heatmap * 255).astype(np.uint8)
-        anomaly_vis = cv2.applyColorMap(anomaly_vis, cv2.COLORMAP_JET)
-        axes[idx].imshow(cv2.cvtColor(anomaly_vis, cv2.COLOR_BGR2RGB))
-        axes[idx].set_title("Pixel Anomaly")
-        axes[idx].axis('off')
-        idx += 1
-
-    plt.tight_layout()
-    plt.show()
-
-# -------------------------------------------------
-# 7) Main Workflow
-# -------------------------------------------------
-def analyze_image(image_path, 
-                  cascade_path="haarcascade_frontalface_default.xml",
-                  meso_weights="Meso4_DF.h5",
-                  do_wavelet=True,
-                  do_ela=True,
-                  do_anomaly=True,
-                  check_exif=True):
-    """
-    Analyzes an image with multiple steps in order of quickness:
-      1. EXIF check (quick)
-      2. Face detection -> Meso4 if found
-      3. Wavelet analysis
-      4. ELA
-      5. Naive pixel anomaly
-    Then visualize.
-    """
-    if not os.path.exists(image_path):
-        print(f"[!] No file at {image_path}")
-        return
-
-    print(f"Analyzing: {image_path}")
+# -------------------------------------------
+# (E) Full Workflow With Heuristics
+# -------------------------------------------
+def analyze_image(
+    image_path,
+    face_cascade="haarcascade_frontalface_default.xml",
+    meso_weights="Meso4_DF.h5"
+):
+    # We'll store reasons
+    suspicious_reasons = []
 
     # 1) EXIF
-    if check_exif:
-        print("[*] Checking EXIF/metadata (quick).")
-        check_exif_metadata(image_path)
-        print("-"*40)
+    exif_info, exif_susp = check_exif_metadata(image_path)
+    if exif_susp:
+        suspicious_reasons.append(f"EXIF: {exif_susp}")
 
-    # 2) Face detection -> if found, run Meso4
-    print("[*] Trying face detection (quick) ...")
-    face_img, bbox = detect_and_crop_face(image_path, cascade_path=cascade_path)
-    face_label_str, face_conf = "NoFace", 0.0
-    if face_img is not None:
-        print("[*] Face found. Running Meso4 ...")
-        face_label_str, face_conf = run_meso4_on_face(face_img, meso_weights)
-        print(f"    => {face_label_str} (conf={face_conf:.2f})")
-    else:
-        print("[!] No face found. Skipping Meso4.")
-    print("-"*40)
+    # 2) Face detection => Meso4
+    face_rgb, bbox = detect_and_crop_face(image_path, face_cascade)
+    face_label, face_conf = "NoFace", 0.0
+    if face_rgb is not None:
+        face_label, face_conf = run_meso4_on_face(face_rgb, meso_weights)
+        if face_label == "Fake" and face_conf > 0.6:
+            suspicious_reasons.append(f"Meso4: Fake face conf={face_conf:.2f}")
 
-    # 3) Wavelet
-    wavelet_map = None
-    if do_wavelet:
-        print("[*] Wavelet analysis ...")
-        wavelet_map = wavelet_analysis(image_path)
-    else:
-        print("[*] Skipping wavelet analysis.")
+    # Not used since unreliable. Looks cool though, and visualizes heatmaps!
+    """
+    # 3) Wavelet => detail energy
+    wave_map, detail_energy = wavelet_analysis(image_path)
+    # Heuristic: normal images might have detail_energy ~ 5..30
+    # TOTALLY depends on resolution. We'll do a naive check
+    if detail_energy < 4 or detail_energy > 50:
+        suspicious_reasons.append(f"Wavelet detail energy out of range ({detail_energy:.2f})")
 
-    # 4) ELA
-    ela_img = None
-    if do_ela:
-        print("[*] Performing ELA (can be heavier).")
-        ela_img = perform_ela(image_path, quality=90)
-    else:
-        print("[*] Skipping ELA.")
+    # 4) ELA => average brightness
+    ela_img, ela_brightness = ela_analysis(image_path, quality=90)
+    # Heuristic: normal ELA brightness might be ~10..30 range 
+    # Very low => suspiciously uniform, Very high => suspicious recompression
+    if ela_brightness < 5 or ela_brightness > 40:
+        suspicious_reasons.append(f"ELA brightness suspicious ({ela_brightness:.2f})")
 
-    # 5) Pixel anomaly on either ELA or original
-    anomaly_heatmap = None
-    if do_anomaly:
-        print("[*] Checking pixel-level anomalies.")
-        if ela_img is not None:
-            anomaly_heatmap = pixel_anomaly_map(ela_img, block_size=8)
-        else:
-            # If ELA was skipped, do anomaly on original
-            with Image.open(image_path) as pil_img:
-                anomaly_heatmap = pixel_anomaly_map(pil_img, block_size=8)
-    else:
-        print("[*] Skipping anomaly map.")
+    # 5) Pixel anomaly => fraction flagged
+    anomaly_map, frac_flagged = pixel_anomaly_map(ela_img, block_size=8)
+    # If > 0.2 => suspicious
+    if frac_flagged > 0.2:
+        suspicious_reasons.append(f"Pixel anomaly fraction high ({frac_flagged:.2f})")
+    """
 
-    # Load original (for final display)
-    original_bgr = cv2.imread(image_path)
+    # 6) FFT => slope
+    slope = fft_naturalness(image_path)
+    # Typical slopes for natural images might be around ~-1 ~-2
+    # If slope > -0.5 or slope < -2.5 => suspicious
+    if slope > -0.5 or slope < -2.5:
+        suspicious_reasons.append(f"FFT slope out of normal range (slope={slope:.2f})")
+
+    # Determine final label
+    final_label = "PASS" if len(suspicious_reasons)==0 else "FLAGGED"
+    print(f"Final Verdict: {final_label}")
+    if final_label=="FLAGGED":
+        for r in suspicious_reasons:
+            print(" -", r)
 
     # Visualization
-    visualize_results(
-        original_bgr,
-        bbox,
-        face_label_str,
-        face_conf,
-        wavelet_map,
-        ela_img,
-        anomaly_heatmap
-    )
+    # Show Original, wavelet map, ELA, anomaly
+    original_bgr = cv2.imread(image_path)
+    show_plots(original_bgr, bbox, face_label, face_conf)
 
-# -------------------------------------------------
-# 8) Manual Pixel-Level Inspection (If you want)
-# -------------------------------------------------
-def show_zoomed_region(image_path, x, y, region_size=50):
+def show_plots(orig_bgr, face_bbox, face_label, face_conf):
+    # Draw face box if any
+    if orig_bgr is not None and face_bbox is not None and face_label != "NoFace":
+        x,y,w,h = face_bbox
+        cv2.rectangle(orig_bgr, (x,y), (x+w,y+h), (0,255,0), 2)
+        cv2.putText(orig_bgr, f"{face_label}({face_conf:.2f})", 
+                    (x,y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,0),2)
+
+    images = []
+    titles = []
+
+    if orig_bgr is not None:
+        images.append(cv2.cvtColor(orig_bgr, cv2.COLOR_BGR2RGB))
+        titles.append("Original")
+
     """
-    Crop around (x,y) => scale up => display.
+    if wave_map is not None:
+        images.append(wave_map)
+        titles.append("Wavelet Detail")
+
+    if ela_img is not None:
+        ela_np = np.array(ela_img.convert('RGB'))
+        images.append(ela_np)
+        titles.append("ELA Map")
+
+    if anomaly_map is not None:
+        an_np = (anomaly_map*255).astype(np.uint8)
+        an_vis = cv2.applyColorMap(an_np, cv2.COLORMAP_JET)
+        an_vis = cv2.cvtColor(an_vis, cv2.COLOR_BGR2RGB)
+        images.append(an_vis)
+        titles.append("Pixel Anomaly")
+
+    n = len(images)
+    fig, axes = plt.subplots(1, n, figsize=(5*n,5))
+    if n==1:
+        axes=[axes]
+
+    for i,ax in enumerate(axes):
+        ax.imshow(images[i])
+        ax.set_title(titles[i])
+        ax.axis('off')
+    plt.tight_layout()
+    plt.show()
     """
-    img = cv2.imread(image_path)
-    if img is None:
-        print("[!] Cannot open image for manual inspection.")
-        return
-    H, W, _ = img.shape
-    x1 = max(0, x - region_size//2)
-    y1 = max(0, y - region_size//2)
-    x2 = min(W, x1 + region_size)
-    y2 = min(H, y1 + region_size)
-    cropped = img[y1:y2, x1:x2]
 
-    # 10x nearest neighbor
-    zoomed = cv2.resize(cropped, None, fx=10.0, fy=10.0, interpolation=cv2.INTER_NEAREST)
-    cv2.imshow("Zoomed Region", zoomed)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
-
-# -------------------------------------------------
-# 9) Run from CLI
-# -------------------------------------------------
-if __name__ == "__main__":
-    # Example usage:
-    # Put Meso4_DF.h5 + haarcascade_frontalface_default.xml in same folder
-    # Then run: python script.py
-    IMAGE_PATH = "deep_fake.webp"  # or "photoshopped.png", "real.jpg", etc.
+# -------------------------------------------
+# (F) Run
+# -------------------------------------------
+if __name__=="__main__":
+    #IMAGE_PATH = "AI_generated2.png"  # or "some_image.png"
+    IMAGE_PATH = "real.jpg"
     CASCADE_PATH = "haarcascade_frontalface_default.xml"
-    MESO_WEIGHTS = "Meso4_DF.h5"
+    MESO_WEIGHTS= "Meso4_DF.h5"
 
-    analyze_image(
-        image_path=IMAGE_PATH,
-        cascade_path=CASCADE_PATH,
-        meso_weights=MESO_WEIGHTS,
-        do_wavelet=True,
-        do_ela=True,
-        do_anomaly=True,
-        check_exif=True
-    )
-
-    # For manual zoom in on suspicious coordinates:
-    # show_zoomed_region(IMAGE_PATH, x=100, y=50, region_size=30)
+    analyze_image(IMAGE_PATH, CASCADE_PATH, MESO_WEIGHTS)

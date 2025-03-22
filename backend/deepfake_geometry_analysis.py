@@ -132,6 +132,28 @@ def analyze_face(image_path, face_cascade="haarcascade_frontalface_default.xml",
 # Full Analysis & Visualization
 # ------------------------------
 def analyze_image(image_path, save_plots=False):
+    radial_profile, freq_slope = analyze_frequency_distribution(image_path)
+    _, avg_blur = local_blur_analysis(image_path)
+    horizon_lines, _ = horizon_checker(image_path)
+    suspicious_geometry = analyze_horizon_heuristics(horizon_lines)
+    face_suspicious = analyze_face(image_path)
+    _, exif_missing = check_exif_metadata(image_path)
+
+    reasons = []
+    if exif_missing:
+        reasons.append("Missing EXIF data.")
+    if suspicious_geometry:
+        reasons.append("Suspicious geometry detected.")
+    if face_suspicious:
+        reasons.append("Face forgery detected.")
+    if avg_blur < 10:
+        reasons.append("Unnaturally blurry or AI regions.")
+
+    if reasons:
+        return "AI_GENERATED", "; ".join(reasons)
+    return "REAL", "Image seems authentic."
+
+    """
     print("=== Frequency Analysis ===")
     radial_profile, freq_slope = analyze_frequency_distribution(image_path)
     print(f"Frequency slope: {freq_slope:.2f} (Natural: -1 to -2)")
@@ -180,7 +202,7 @@ def analyze_image(image_path, save_plots=False):
     if not suspicious and not face_passed:
         print("✅ Verdict: Likely REAL")
     print("------------------------\n")
-
+    """
 # ------------------------------
 # (6) Run
 # ------------------------------

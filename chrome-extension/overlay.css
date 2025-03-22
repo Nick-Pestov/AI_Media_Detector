@@ -1,0 +1,14 @@
+/* overlay.css */
+#ai-detector-panel {
+  font-family: Arial, sans-serif;
+  font-size: 14px;
+  color: #333;
+}
+
+#ai-detector-panel p {
+  margin: 0 0 10px;
+}
+
+img[style*="outline: 3px solid red"] {
+  transition: outline 0.5s;
+}

@@ -8,14 +8,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         })
         .then(res => res.json())
         .then(data => {
-          const reasons = data.reasons || [];
-          const flags = data.flags || [];
-  
           chrome.tabs.sendMessage(sender.tab.id, {
             type: 'FLAG_IMAGE',
             imageUrl: imageUrl,
-            reason: reasons.join('; '),
-            flags: flags
+            reason: data.reasons.join('; '),
+            flags: data.flags || [],
+            visuals: data.visuals || {},
+            verdict: data.verdict
           });
         })
         .catch(console.error);

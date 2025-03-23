@@ -15,20 +15,32 @@ def fig_to_base64(fig):
     buf.seek(0)
     img_base64 = base64.b64encode(buf.read()).decode('utf-8')
     buf.close()
-    plt.close(fig)  # <-- Make sure you close figures!
+    plt.close(fig)
     return img_base64
 
 def analyze_image_with_visuals(image_path):
     reasons = []
     visuals = {}
+    flags = []
+
+    # EXIF Check
+    _, exif_missing = check_exif_metadata(image_path)
+    if exif_missing:
+        reasons.append("Missing EXIF metadata (may indicate manipulation).")
+        flags.append("exif_missing")
 
     # Frequency Analysis
     radial_profile, freq_slope = analyze_frequency_distribution(image_path)
-    if not -2.5 < freq_slope < -0.5:
-        reasons.append("Unnatural frequency distribution.")
-        fig = plt.figure()
-        show_frequency_profile(radial_profile)
-        visuals["frequency_analysis"] = fig_to_base64(fig)
+    if freq_slope is not None:
+        fig = show_frequency_profile(radial_profile)
+        visuals["fft_analysis"] = fig_to_base64(fig)
+
+        # Only flag if very unnatural
+        if not (-2.5 < freq_slope < -0.5):
+            reasons.append(f"Unnatural frequency distribution (slope={freq_slope:.2f})")
+            flags.append("fft_suspicious")
+        else:
+            flags.append("fft_visual_only")  # Will show visual but not trigger alert
 
     # Blur Analysis
     laplacian_vars, avg_blur = local_blur_analysis(image_path)
@@ -41,39 +53,48 @@ def analyze_image_with_visuals(image_path):
         plt.ylabel("Frequency")
         visuals["blur_analysis"] = fig_to_base64(fig)
 
-    # Horizon Analysis
-    horizon_lines, edges = horizon_checker(image_path)
+    # Horizon Geometry
+    horizon_lines, _ = horizon_checker(image_path)
     suspicious_geometry = analyze_horizon_heuristics(horizon_lines)
     if suspicious_geometry:
         reasons.append("Suspicious horizon geometry.")
         img_color = cv2.cvtColor(np.array(Image.open(image_path)), cv2.COLOR_RGB2BGR)
         for (x1, y1, x2, y2, _) in horizon_lines:
             cv2.line(img_color, (x1, y1), (x2, y2), (0,0,255), 2)
-        fig = plt.figure(figsize=(8,8))
-        plt.imshow(cv2.cvtColor(img_color, cv2.COLOR_BGR2RGB))
+        fig, ax = plt.subplots(figsize=(8, 8))
+        ax.imshow(cv2.cvtColor(img_color, cv2.COLOR_BGR2RGB))
+        ax.set_title("Detected Horizon Lines")
+        ax.axis('off')
+        visuals["horizon_analysis"] = fig_to_base64(fig)
         plt.title("Detected Horizon Lines")
         plt.axis('off')
         visuals["horizon_analysis"] = fig_to_base64(fig)
 
-    # Face Forgery (optional)
-    face_suspicious = analyze_face(image_path)
-    if face_suspicious:
-        reasons.append("Face forgery detected.")
+    # Face Forgery Detection
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    face_rgb, bbox = detect_and_crop_face(image_path, os.path.join(current_dir, "haarcascade_frontalface_default.xml"))
+    if face_rgb is not None:
+        face_label, face_conf = run_meso4_on_face(face_rgb, meso_weights=os.path.join(current_dir, "Meso4_DF.h5"))
+        if face_label == "Fake" and face_conf > 0.6:
+            reasons.append(f"Face forgery detected with confidence {face_conf:.2f}.")
+            flags.append("face_forgery")
+            fig = plt.figure()
+            plt.imshow(face_rgb)
+            plt.title(f"Detected Face: {face_label} ({face_conf:.2f})")
+            plt.axis('off')
+            visuals["face_analysis"] = fig_to_base64(fig)
 
-    if reasons:
-        return "AI_GENERATED", reasons, visuals
-    else:
-        return "REAL", ["Image seems authentic."], {}
+    verdict = "AI_GENERATED" if reasons else "REAL"
+    return verdict, reasons, visuals, flags
 
-# ------------------------------
-# (1) Frequency Analysis via FFT
-# ------------------------------
+# FFT analysis
+
 def analyze_frequency_distribution(image_path):
     try:
         with Image.open(image_path).convert('L') as im:
             img_np = np.array(im, dtype=np.uint8)
     except Exception as e:
-        print(f"❌ Unsupported image format for file, cannot analyze it T_T")
+        print("❌ Unsupported image format for file, cannot analyze it T_T")
         return None, None
     f = np.fft.fft2(img_np)
     fshift = np.fft.fftshift(f)
@@ -97,22 +118,18 @@ def analyze_frequency_distribution(image_path):
 
     return radial_profile, slope
 
-def show_frequency_profile(radial_profile, save_path=None):
+def show_frequency_profile(radial_profile):
     r_vals = np.arange(1, len(radial_profile))
-    plt.figure()
-    plt.loglog(r_vals, radial_profile[1:], label='Radial profile')
-    plt.xlabel('Frequency (radius)')
-    plt.ylabel('Average magnitude')
-    plt.title('Frequency Distribution (Radial Average)')
-    plt.legend()
-    if save_path:
-        plt.savefig(save_path)
-    else:
-        plt.show()
+    fig, ax = plt.subplots()
+    ax.loglog(r_vals, radial_profile[1:], label='Radial profile')
+    ax.set_xlabel('Frequency (radius)')
+    ax.set_ylabel('Average magnitude')
+    ax.set_title('Frequency Distribution (Radial Average)')
+    ax.legend()
+    return fig
 
-# ------------------------------
-# (2) Local Blur (Sharpness)
-# ------------------------------
+# Blur analysis
+
 def local_blur_analysis(image_path, block_size=64):
     with Image.open(image_path).convert('L') as im:
         img_np = np.array(im, dtype=np.uint8)
@@ -131,9 +148,8 @@ def local_blur_analysis(image_path, block_size=64):
     avg_var = np.mean(laplacian_vars) if laplacian_vars else 0.0
     return laplacian_vars, avg_var
 
-# ------------------------------
-# (3) Horizon Line Detection
-# ------------------------------
+# Horizon detection
+
 def horizon_checker(image_path, edge_thresh1=50, edge_thresh2=150, hough_thresh=100):
     with Image.open(image_path).convert('L') as im:
         img_np = np.array(im, dtype=np.uint8)
@@ -148,9 +164,6 @@ def horizon_checker(image_path, edge_thresh1=50, edge_thresh2=150, hough_thresh=
                 horizon_lines.append((x1, y1, x2, y2, angle))
     return horizon_lines, edges
 
-# ------------------------------
-# (4) Heuristic Analysis of Lines
-# ------------------------------
 def analyze_horizon_heuristics(horizon_lines):
     angles = [angle for (_, _, _, _, angle) in horizon_lines]
     y_coords = [(y1 + y2) // 2 for (_, y1, _, y2, _) in horizon_lines]
@@ -176,7 +189,6 @@ def analyze_horizon_heuristics(horizon_lines):
         suspicious = True
 
     return suspicious
-
 # ------------------------------
 # (5) MesoNet Analysis (Face forgery) <-- not the most reliable so it has a high threshold, but still captures very high values well
 # ------------------------------
@@ -241,7 +253,6 @@ def analyze_image2(image_path, save_plots=False):
 
     suspicious = analyze_horizon_heuristics(horizon_lines)
 
-    # Visualize horizon lines
     img_color = cv2.cvtColor(np.array(Image.open(image_path)), cv2.COLOR_RGB2BGR)
     if horizon_lines:
         for (x1, y1, x2, y2, _) in horizon_lines:
@@ -256,7 +267,6 @@ def analyze_image2(image_path, save_plots=False):
     else:
         plt.show()
 
-    # Final verdict
     print("\n------------------------")
     _, missing_tag = check_exif_metadata(image_path)
     if missing_tag:
@@ -266,14 +276,10 @@ def analyze_image2(image_path, save_plots=False):
     face_passed = analyze_face(image_path)
     if face_passed:
         print("🚩 Verdict: POSSIBLY AI-GENERATED (suspicious face)")
-
-
     if not suspicious and not face_passed:
         print("✅ Verdict: Likely REAL")
     print("------------------------\n")
-# ------------------------------
-# (6) Run
-# ------------------------------
+
 if __name__ == "__main__":
-    IMAGE_PATH = "./backend/image8.avif"  # Replace with your image
+    IMAGE_PATH = "./backend/image8.avif"
     analyze_image2(IMAGE_PATH)

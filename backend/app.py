@@ -21,7 +21,7 @@ clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
 clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
 def openai_verify_content(text):
-    response = openai.Moderation.create(input=text)  # <-- FIXED LINE
+    response = client.moderations.create(input=text) # <-- FIXED LINE
     result = response["results"][0]
     return {
         "harmful": result["flagged"],
@@ -36,7 +36,9 @@ def analyze():
     image_url = data['image_url']
 
     # Download image
-    response = requests.get(image_url)
+    response = requests.get(image_url, headers={
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36'
+    })
     if response.status_code != 200:
         return jsonify({"verdict": "ERROR", "reason": "Image fetch failed"})
 
@@ -46,7 +48,7 @@ def analyze():
 
     try:
         # Geometry + Visuals
-        verdict_geom, reasons_geom, visuals = analyze_image_with_visuals(tmp_path)
+        verdict_geom, reasons_geom, visuals, flags_geom = analyze_image_with_visuals(tmp_path)
 
         # CLIP classification
         clip_label, clip_conf = classify_with_clip(tmp_path)
@@ -58,9 +60,12 @@ def analyze():
             openai_result = openai_verify_content(extracted_text)
 
         reasons = reasons_geom.copy()
+        flags = flags_geom.copy()
+
         if openai_result:
             if openai_result.get('clickbait'):
                 reasons.append("Clickbait detected")
+                flags.append("clickbait")
             if openai_result.get('harmful'):
                 reasons.append("Potentially harmful or misleading content")
             if openai_result.get('accuracy') == "inaccurate":
@@ -68,12 +73,7 @@ def analyze():
 
         if clip_label in ["violent", "clickbait"]:
             reasons.append(f"CLIP flagged as {clip_label} (conf={clip_conf:.2f})")
-
-        flags = []
-        if "violent" in clip_label:
-            flags.append("blur_violent")
-        if "clickbait" in clip_label:
-            flags.append("blur_clickbait")
+            flags.append(f"blur_{clip_label}")
 
         final_verdict = "AI_GENERATED" if reasons else "REAL"
 
@@ -89,37 +89,6 @@ def analyze():
 
     finally:
         os.unlink(tmp_path)
-
-def analyze_image_api(image_path):
-    from deepfake_geometry_analysis import (
-        analyze_frequency_distribution,
-        local_blur_analysis,
-        horizon_checker,
-        analyze_horizon_heuristics,
-        analyze_face,
-        check_exif_metadata
-    )
-
-    radial_profile, freq_slope = analyze_frequency_distribution(image_path)
-    _, avg_blur = local_blur_analysis(image_path)
-    horizon_lines, _ = horizon_checker(image_path)
-    suspicious_geometry = analyze_horizon_heuristics(horizon_lines)
-    face_suspicious = analyze_face(image_path)
-    _, exif_missing = check_exif_metadata(image_path)
-
-    reasons = []
-    if exif_missing:
-        reasons.append("Missing EXIF data.")
-    if suspicious_geometry:
-        reasons.append("Suspicious geometry detected.")
-    if face_suspicious:
-        reasons.append("Face forgery detected.")
-    if avg_blur < 10:
-        reasons.append("Unnaturally blurry or AI regions.")
-
-    if reasons:
-        return "AI_GENERATED", "; ".join(reasons)
-    return "REAL", "Image seems authentic."
 
 def classify_with_clip(image_path):
     labels = ["normal", "violent", "clickbait", "fake"]

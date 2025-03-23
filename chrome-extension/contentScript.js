@@ -15,12 +15,40 @@ function findAllImages() {
 // Highlight AI-flagged images
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'FLAG_IMAGE') {
-      const flaggedImages = document.querySelectorAll(`img[src="${message.imageUrl}"]`);
+    const imgs = document.querySelectorAll(`img[src="${message.imageUrl}"]`);
+    const flags = message.flags || [];
+    const reason = message.reason || 'Flagged content';
 
-      flaggedImages.forEach(img => {
-          img.style.outline = '3px solid red';
-          addInfoIcon(img, message.reason);
-      });
+    imgs.forEach(img => {
+      // Handle violence or clickbait with blur
+      if (flags.includes('blur_violent') || flags.includes('blur_clickbait')) {
+        img.style.filter = 'blur(12px)';
+        img.style.transition = 'filter 0.3s';
+
+        const revealBtn = document.createElement('button');
+        revealBtn.textContent = '🔓 Reveal';
+        revealBtn.style.cssText = `
+          position: absolute;
+          background: rgba(255,255,255,0.95);
+          border: 1px solid #ccc;
+          padding: 4px 8px;
+          font-size: 12px;
+          cursor: pointer;
+          z-index: 9999;
+        `;
+        const rect = img.getBoundingClientRect();
+        revealBtn.style.top = `${rect.top + window.scrollY + 5}px`;
+        revealBtn.style.left = `${rect.left + window.scrollX + 5}px`;
+        revealBtn.onclick = () => {
+          img.style.filter = 'none';
+          revealBtn.remove();
+        };
+        document.body.appendChild(revealBtn);
+      }
+
+      // Show the info icon regardless
+      addInfoIcon(img, reason);
+    });
   }
 });
 

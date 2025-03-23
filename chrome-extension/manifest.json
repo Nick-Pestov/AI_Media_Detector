@@ -26,7 +26,13 @@
     "action": {
       "default_title": "AI Detector",
       "default_popup": "popup.html",
-      "default_icon": "AI_Detector_Chrome_Extension_Logo.png"
+      "default_icon": {
+  "16": "AI_Detector_Chrome_Extension_Logo.png",
+  "32": "AI_Detector_Chrome_Extension_Logo.png",
+  "48": "AI_Detector_Chrome_Extension_Logo.png",
+  "128": "AI_Detector_Chrome_Extension_Logo.png"
+}
+
     }
   }
   

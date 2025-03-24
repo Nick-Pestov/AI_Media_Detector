@@ -2,6 +2,8 @@
 
 **Chrome Extension built at the GenAI Genesis Hackathon**
 
+Created by Nick Pestov, Ashwin Mayurathan, Caleb Joseph & Mayushan Mayurathan
+
 🎥 [link to recorded demo](https://youtu.be/-PPWmH8h8h4?si=SrPUmjGHQXROqBVL)  
 🌐 [Landing Page](https://verifai-mock-download-hub.lovable.app/)
 

@@ -1,4 +1,4 @@
-# verif.ai – AI Media Detector 🧠🔍
+# verif.ai – AI Media Detector - GenAI Genesis 2025🧠🔍
 
 **Chrome Extension built at the GenAI Genesis Hackathon**
 

@@ -1,4 +1,4 @@
-# Google Chrome Extension to Warn of AI generated content and Harmful content
+# Google Chrome Extension to Warn of AI generated content and Harmful content present on a webpage
 
 # verif.ai – AI Media Detector - GenAI Genesis 2025🧠🔍
 
